@@ -6,10 +6,6 @@ from ui_inicio import COLOR_FONDO, PantallaInicio
 
 
 class VentanaPrincipal(ctk.CTk):
-    """
-    Ventana raíz de la aplicación con fondo carbón (#141517).
-    """
-
     def __init__(self) -> None:
         super().__init__(fg_color=COLOR_FONDO)
 

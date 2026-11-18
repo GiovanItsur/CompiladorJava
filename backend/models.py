@@ -1,5 +1,8 @@
 from dataclasses import dataclass
 
+"""
+Creación de 'moldes' o 'contenedores' de datos, @dataclass para que Python genere automáticament el constructor
+"""
 
 @dataclass
 class Token:
@@ -7,7 +10,6 @@ class Token:
     lexema: str
     tipo_token: str
     linea: int
-
 
 @dataclass
 class Simbolo:

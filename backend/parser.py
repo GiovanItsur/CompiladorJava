@@ -4,7 +4,6 @@ from backend.models import ErrorCompilador, Instruccion, Simbolo, Token
 
 # Jerarquía de amplitud para enteros: un tipo de mayor rango (ej. long = 4)
 # no puede asignarse a uno de menor rango (ej. int = 3) sin casteo.
-# El literal VTE tiene rango 0 para poder asignarse a byte, short, int o long.
 JERARQUIA_ENTEROS: Dict[str, int] = {
     "VTE": 0,
     "byte": 1,
@@ -27,9 +26,7 @@ TIPOS_NUMERICOS = {
 }
 
 
-def analizar_sintactico_semantico(
-    tokens: List[Token], tabla_simbolos: List[Simbolo]
-) -> Tuple[bool, List[Instruccion], List[ErrorCompilador]]:
+def analizar_sintactico_semantico(tokens: List[Token], tabla_simbolos: List[Simbolo]) -> Tuple[bool, List[Instruccion], List[ErrorCompilador]]:
     """Ejecuta las fases 2, 4, 5 y 6 del analizador."""
     analizador = AnalizadorSintacticoSemantico(tokens, tabla_simbolos)
     return analizador.ejecutar()
@@ -998,6 +995,7 @@ class AnalizadorSintacticoSemantico:
     def _registrar_variable_semantica(
         self, nombre: str, tipo_dato: str, linea: int, inicializada: bool
     ) -> None:
+        # Si ya existe en el mismo ambito da error, si no, gguarda el nuevo objeto en el diccionario
         tabla_ambito: Dict[str, Simbolo] = self.ambitos[self.ambito_actual]
         if nombre in tabla_ambito:
             self._agregar_error(linea, nombre, "Semántico")
@@ -1021,6 +1019,7 @@ class AnalizadorSintacticoSemantico:
                 break
 
     def _buscar_variable_semantica(self, nombre: str) -> Optional[Simbolo]:
+       # Busca si esta en ambito local, luego global, si no está da error
         if nombre in self.ambitos.get(self.ambito_actual, {}):
             return self.ambitos[self.ambito_actual][nombre]
         if nombre in self.ambitos.get("global", {}):
@@ -1028,6 +1027,7 @@ class AnalizadorSintacticoSemantico:
         return None
 
     def _verificar_variable_numerica_usada(self, tok_id: Token) -> None:
+        # se usa en i++ o i--
         simbolo: Optional[Simbolo] = self._buscar_variable_semantica(tok_id.lexema)
         if (
             simbolo is None
@@ -1039,6 +1039,7 @@ class AnalizadorSintacticoSemantico:
     def _combinar_tipos_operacion(
         self, tipo_izq: str, tok_op: Token, tipo_der: str
     ) -> str:
+        # Verifica que los dos tipos se pueden operar entre si con el tok_op: 1 + 1,  x == y
         if tipo_izq == "error" or tipo_der == "error":
             return "error"
 
@@ -1086,6 +1087,7 @@ class AnalizadorSintacticoSemantico:
     def _validar_compatibilidad_tipos(
         self, tipo_destino: str, tipo_origen: str, linea: int, lexema_error: str
     ) -> None:
+        # Si son iguales no da error, si no entran uno en otro, no son compatibles, o si no cumple con nada, da error
         if tipo_destino == tipo_origen:
             return
 

@@ -105,7 +105,6 @@ public class PruebaLexica {
     }
 }""",
     "5. Errores Sintácticos (Falta ; y static)": """// Prueba 5: Demuestra detección exacta de falta de ';' al final de la línea
-// y prohibición de variables 'static' en la GLC v7.
 package sintaxis;
 public class PruebaSintactica {
     static int prohibido = 1;

@@ -1,8 +1,7 @@
 from typing import Dict, List, Optional, Tuple, Set
 from backend.models import ErrorCompilador, Simbolo, Token
 
-
-# Palabras reservadas oficiales del PDF de tokens
+# Palabras reservadas oficiales
 PALABRAS_RESERVADAS: Dict[str, str] = {
     "int": "TD",
     "boolean": "TD",
@@ -51,8 +50,7 @@ PALABRAS_RESERVADAS: Dict[str, str] = {
     "null": "NU",
 }
 
-# Identificadores propios de Java: se clasifican con token 'ID',
-# pero NO se les asigna número de ID del programador.
+# Identificadores de Java
 IDS_BASE_JAVA: Set[str] = {
     "System",
     "out",
@@ -132,15 +130,16 @@ SIMBOLOS_SIMPLES: Dict[str, str] = {
     "~": "OPB",
 }
 
-
 def analizar_lexico(
     codigo_depurado: str, mapa_lineas: List[int]
 ) -> Tuple[List[Token], List[Simbolo], List[ErrorCompilador]]:
+
     """
     Fase 3: Escanea el código depurado y genera la lista de tokens,
-    la Tabla de Símbolos (separando IDs globales y locales por método)
+    la Tabla de Símbolos (separando IDs globales y locales por mét odo)
     y la lista de errores léxicos.
     """
+
     tokens: List[Token] = []
     tabla_simbolos: List[Simbolo] = []
     errores: List[ErrorCompilador] = []
@@ -267,10 +266,8 @@ def analizar_lexico(
                 )
                 continue
 
-            # Declaración de método del programador en el cuerpo de la clase
-            if nivel_llaves == 1 and _es_declaracion_metodo(
-                tokens, codigo_depurado, i
-            ):
+            # Declaración de mét odo del programador en el cuerpo de la clase
+            if nivel_llaves == 1 and _es_declaracion_metodo(tokens, codigo_depurado, i):
                 contador_ids = _registrar_identificador(
                     lexema,
                     linea_actual,
@@ -413,10 +410,8 @@ def _es_declaracion_variable(tokens_previos: List[Token]) -> bool:
     return False
 
 
-def _es_declaracion_metodo(
-    tokens_previos: List[Token], codigo: str, indice_post_id: int
-) -> bool:
-    """Verifica si un ID en nivel de clase es el nombre de un método."""
+def _es_declaracion_metodo(tokens_previos: List[Token], codigo: str, indice_post_id: int) -> bool:
+    """Verifica si un ID en nivel de clase es el nombre de un métod o."""
     if len(tokens_previos) < 2:
         return False
 
@@ -438,9 +433,7 @@ def _es_declaracion_metodo(
     return j < len(codigo) and codigo[j] == "("
 
 
-def _es_firma_main(
-    tokens_previos: List[Token], codigo: str, indice_post_main: int
-) -> bool:
+def _es_firma_main(tokens_previos: List[Token], codigo: str, indice_post_main: int) -> bool:
     """Verifica que 'main' esté precedido por 'public static void' y seguido de '('."""
     if len(tokens_previos) < 3:
         return False
@@ -460,9 +453,7 @@ def _es_firma_main(
     return j < len(codigo) and codigo[j] == "("
 
 
-def _leer_cadena(
-    codigo: str, inicio: int, delimitador: str
-) -> Tuple[str, int, bool]:
+def _leer_cadena(codigo: str, inicio: int, delimitador: str) -> Tuple[str, int, bool]:
     longitud: int = len(codigo)
     i: int = inicio + 1
 
@@ -489,9 +480,7 @@ def _es_caracter_valido(lexema: str) -> bool:
 def _leer_secuencia_numerica(codigo: str, inicio: int) -> Tuple[str, int]:
     longitud: int = len(codigo)
     i: int = inicio
-    while i < longitud and (
-        codigo[i].isalnum() or codigo[i] == "_" or codigo[i] == "."
-    ):
+    while i < longitud and (codigo[i].isalnum() or codigo[i] == "_" or codigo[i] == "."):
         i += 1
     return codigo[inicio:i], i
 

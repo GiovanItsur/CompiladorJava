@@ -1,10 +1,7 @@
 from typing import List, Tuple
 
-
 def _es_caracter_palabra(c: str) -> bool:
-    """Indica si un carácter forma parte de una palabra o número (alfanumérico o '_')."""
     return c.isalnum() or c == "_"
-
 
 def depurar_codigo(codigo_crudo: str) -> Tuple[str, List[int]]:
     """
