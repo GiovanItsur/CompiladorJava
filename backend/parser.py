@@ -2,8 +2,29 @@ from typing import Dict, List, Optional, Tuple
 from backend.models import ErrorCompilador, Instruccion, Simbolo, Token
 
 
-TIPOS_ENTEROS = {"int", "long", "short", "byte", "char"}
-TIPOS_NUMERICOS = {"int", "long", "short", "byte", "char", "float", "double"}
+# Jerarquía de amplitud para enteros: un tipo de mayor rango (ej. long = 4)
+# no puede asignarse a uno de menor rango (ej. int = 3) sin casteo.
+# El literal VTE tiene rango 0 para poder asignarse a byte, short, int o long.
+JERARQUIA_ENTEROS: Dict[str, int] = {
+    "VTE": 0,
+    "byte": 1,
+    "short": 2,
+    "char": 2,
+    "int": 3,
+    "long": 4,
+}
+
+TIPOS_ENTEROS = {"VTE", "int", "long", "short", "byte", "char"}
+TIPOS_NUMERICOS = {
+    "VTE",
+    "int",
+    "long",
+    "short",
+    "byte",
+    "char",
+    "float",
+    "double",
+}
 
 
 def analizar_sintactico_semantico(
@@ -40,29 +61,40 @@ class AnalizadorSintacticoSemantico:
             return False, [], self.errores
 
         self._parse_java()
-        # Ordenar las instrucciones por número de línea para la tabla
         self.instrucciones_evaluadas.sort(key=lambda inst: inst.linea)
         return True, self.instrucciones_evaluadas, self.errores
 
     # =========================================================================
-    # FASE 2: VALIDACIÓN DE CLASE PRINCIPAL Y MAIN
+    # FASE 2: VALIDACIÓN DE PACKAGE, CLASE PRINCIPAL Y MAIN
     # =========================================================================
 
     def _validar_estructura_principal(self) -> bool:
-        """Verifica 'public class ID { ... public static void main(String[] ID) { ... } }'."""
-        idx: int = 0
+        """
+        Verifica estrictamente que el programa inicie con 'package ID;' y contenga
+        'public class ID { ... public static void main(String[] ID) { ... } }'.
+        """
         n: int = len(self.tokens)
 
-        if idx < n and self.tokens[idx].tipo_token == "PCK":
-            while idx < n and self.tokens[idx].tipo_token != "FI":
-                idx += 1
-            idx += 1
+        # 1. Validar que inicie obligatoriamente con DPACKAGE: package ID ;
+        if (
+            n < 3
+            or self.tokens[0].tipo_token != "PCK"
+            or self.tokens[1].tipo_token != "ID"
+            or self.tokens[2].tipo_token != "FI"
+        ):
+            linea_pck: int = self.tokens[0].linea if n > 0 else 1
+            self._agregar_error(linea_pck, "package", "Sintáctico")
+            return False
 
+        idx: int = 3
+
+        # 2. Saltar IMPORTS opcionales: import ID.ID ;
         while idx < n and self.tokens[idx].tipo_token == "IMP":
             while idx < n and self.tokens[idx].tipo_token != "FI":
                 idx += 1
             idx += 1
 
+        # 3. Validar encabezado 'public class ID {'
         if (
             idx + 3 >= n
             or self.tokens[idx].lexema != "public"
@@ -75,6 +107,7 @@ class AnalizadorSintacticoSemantico:
             self._agregar_error(linea, lex, "Sintáctico")
             return False
 
+        # 4. Validar existencia de 'public static void main(String[] ID) {'
         tiene_main: bool = False
         for i in range(idx + 4, n - 10):
             if (
@@ -97,6 +130,7 @@ class AnalizadorSintacticoSemantico:
             self._agregar_error(self.tokens[0].linea, "main", "Sintáctico")
             return False
 
+        # 5. Validar balanceo de llaves '{' y '}'
         balance: int = 0
         for tok in self.tokens:
             if tok.tipo_token == "LLA":
@@ -124,23 +158,17 @@ class AnalizadorSintacticoSemantico:
         self._parse_clase()
 
     def _parse_dpackage(self) -> None:
-        """DPACKAGE ::= PCK ID FI | ε"""
-        if self._coincide("PCK"):
-            inicio: int = self.pos
-            errores_previos: int = len(self.errores)
-            self._avanzar()
-            if not self._consumir("ID"):
-                self._sincronizar_hasta_fi()
-                self._registrar_instruccion(
-                    inicio, self.pos, "DPACKAGE ::= PCK ID FI", False
-                )
-                return
-            if not self._consumir("FI"):
-                self._sincronizar_hasta_fi()
-            es_valida: bool = len(self.errores) == errores_previos
-            self._registrar_instruccion(
-                inicio, self.pos, "DPACKAGE ::= PCK ID FI", es_valida
-            )
+        """DPACKAGE ::= PCK ID FI (Obligatorio en GLC v7)"""
+        inicio: int = self.pos
+        errores_previos: int = len(self.errores)
+
+        if not self._consumir("PCK") or not self._consumir("ID") or not self._consumir("FI"):
+            self._sincronizar_hasta_fi()
+
+        es_valida: bool = len(self.errores) == errores_previos
+        self._registrar_instruccion(
+            inicio, self.pos, "DPACKAGE ::= PCK ID FI", es_valida
+        )
 
     def _parse_imports(self) -> None:
         """IMPORT ::= IMP ID CA ID FI"""
@@ -357,11 +385,7 @@ class AnalizadorSintacticoSemantico:
     # =========================================================================
 
     def _parse_cuerpo(self) -> None:
-        """
-        CUERPO ::= INST CUERPO | ε
-        Incluye 'BR' (break) en la condición de paro para que switch/case
-        pueda procesar su propio BREAK ::= BR FI sin marcar error.
-        """
+        """CUERPO ::= INST CUERPO | ε"""
         while not self._fin() and not self._coincide(
             "LLC", "RTN", "CS", "DF", "BR"
         ):
@@ -444,7 +468,9 @@ class AnalizadorSintacticoSemantico:
         tok_id: Optional[Token] = self._actual()
         if not self._consumir("ID"):
             self._sincronizar_hasta_fi()
-            regla_err = "D_GLOB ::= MAO TY ID FI" if es_global else "DEC ::= TY ID FI"
+            regla_err = (
+                "D_GLOB ::= MAO TY ID FI" if es_global else "DEC ::= TY ID FI"
+            )
             self._registrar_instruccion(inicio, self.pos, regla_err, False)
             return
 
@@ -743,7 +769,6 @@ class AnalizadorSintacticoSemantico:
 
         self._consumir("LLA")
 
-        # L_CASES ::= CASE L_CASES | ε ; CASE ::= CS VAL DOP CUERPO BREAK
         while self._coincide("CS"):
             inicio_cs: int = self.pos
             err_cs: int = len(self.errores)
@@ -775,7 +800,6 @@ class AnalizadorSintacticoSemantico:
                     len(self.errores) == err_br,
                 )
 
-        # C_DEF ::= DF DOP CUERPO BREAK | ε
         if self._coincide("DF"):
             inicio_df: int = self.pos
             err_df: int = len(self.errores)
@@ -804,7 +828,7 @@ class AnalizadorSintacticoSemantico:
         self._consumir("LLC")
 
     # =========================================================================
-    # EXPRESIONES Y ACCESOS
+    # EXPRESIONES, CASTEOS Y ACCESOS
     # =========================================================================
 
     def _parse_exp(self) -> str:
@@ -820,10 +844,34 @@ class AnalizadorSintacticoSemantico:
         return tipo_izq
 
     def _parse_termino(self) -> str:
+        """Evalúa casteos (TD) TERMINO, (EXP), OPU VAL, ACC o VAL."""
         tok: Optional[Token] = self._actual()
         if tok is None:
             self._agregar_error(1, "EOF", "Sintáctico")
             return "error"
+
+        if (
+            tok.tipo_token == "PA"
+            and self._mirar(1) is not None
+            and self._mirar(1).tipo_token == "TD"
+            and self._mirar(2) is not None
+            and self._mirar(2).tipo_token == "PC"
+        ):
+            self._avanzar()
+            tok_cast: Token = self._actual()
+            tipo_cast: str = tok_cast.lexema
+            self._avanzar()
+            self._avanzar()
+
+            tipo_operando: str = self._parse_termino()
+            if tipo_operando != "error" and (
+                tipo_cast not in TIPOS_NUMERICOS
+                or tipo_operando not in TIPOS_NUMERICOS
+            ):
+                if tipo_cast != tipo_operando:
+                    self._agregar_error(tok_cast.linea, tipo_cast, "Semántico")
+                    return "error"
+            return tipo_cast
 
         if tok.tipo_token == "PA":
             self._avanzar()
@@ -862,7 +910,7 @@ class AnalizadorSintacticoSemantico:
 
         if tok.tipo_token == "VTE":
             self._avanzar()
-            return "int"
+            return "VTE"
         if tok.tipo_token == "VTD":
             self._avanzar()
             return "double"
@@ -1005,6 +1053,10 @@ class AnalizadorSintacticoSemantico:
                     return "double"
                 if "float" in (tipo_izq, tipo_der):
                     return "float"
+                if "long" in (tipo_izq, tipo_der):
+                    return "long"
+                if tipo_izq == "VTE" and tipo_der == "VTE":
+                    return "VTE"
                 return "int"
             self._agregar_error(linea, tok_op.lexema, "Semántico")
             return "error"
@@ -1025,7 +1077,7 @@ class AnalizadorSintacticoSemantico:
             if tipo_izq == "boolean" and tipo_der == "boolean":
                 return "boolean"
             if tipo_izq in TIPOS_ENTEROS and tipo_der in TIPOS_ENTEROS:
-                return "int"
+                return "long" if "long" in (tipo_izq, tipo_der) else "int"
             self._agregar_error(linea, tok_op.lexema, "Semántico")
             return "error"
 
@@ -1036,15 +1088,27 @@ class AnalizadorSintacticoSemantico:
     ) -> None:
         if tipo_destino == tipo_origen:
             return
+
         if tipo_destino == "float" and tipo_origen == "double":
             self._agregar_error(linea, lexema_error, "Semántico")
             return
+
         if tipo_destino == "double" and tipo_origen in TIPOS_NUMERICOS:
             return
         if tipo_destino == "float" and tipo_origen in TIPOS_ENTEROS:
             return
-        if tipo_destino in TIPOS_ENTEROS and tipo_origen in TIPOS_ENTEROS:
+
+        if (
+            tipo_destino in JERARQUIA_ENTEROS
+            and tipo_origen in JERARQUIA_ENTEROS
+        ):
+            rango_dest: int = JERARQUIA_ENTEROS[tipo_destino]
+            rango_orig: int = JERARQUIA_ENTEROS[tipo_origen]
+            if rango_dest >= rango_orig:
+                return
+            self._agregar_error(linea, lexema_error, "Semántico")
             return
+
         if (
             tipo_destino not in TIPOS_NUMERICOS
             and tipo_destino != "boolean"
@@ -1055,7 +1119,7 @@ class AnalizadorSintacticoSemantico:
         self._agregar_error(linea, lexema_error, "Semántico")
 
     # =========================================================================
-    # UTILIDADES DE NAVEGACIÓN Y REGISTRO DE INSTRUCCIONES
+    # UTILIDADES DE NAVEGACIÓN Y RECUPERACIÓN INTELIGENTE DE ';'
     # =========================================================================
 
     def _actual(self) -> Optional[Token]:
@@ -1084,6 +1148,11 @@ class AnalizadorSintacticoSemantico:
             self.pos += 1
             return True
 
+        if tipo_esperado == "FI" and self.pos > 0:
+            tok_previo: Token = self.tokens[self.pos - 1]
+            self._agregar_error(tok_previo.linea, ";", "Sintáctico")
+            return False
+
         linea: int = (
             tok.linea
             if tok is not None
@@ -1102,8 +1171,30 @@ class AnalizadorSintacticoSemantico:
         self.errores.append(ErrorCompilador(linea=linea, error=error, tipo=tipo))
 
     def _sincronizar_hasta_fi(self) -> None:
+        linea_previa: int = (
+            self.tokens[self.pos - 1].linea if self.pos > 0 else -1
+        )
+
         while not self._fin() and not self._coincide("FI", "LLC"):
+            tok: Optional[Token] = self._actual()
+            if tok is not None:
+                if tok.tipo_token in (
+                    "TD",
+                    "STR",
+                    "PRIF",
+                    "PRW",
+                    "PRDO",
+                    "PRF",
+                    "PRSW",
+                    "RTN",
+                    "BR",
+                    "MA",
+                ):
+                    return
+                if tok.tipo_token == "ID" and tok.linea > linea_previa:
+                    return
             self._avanzar()
+
         if self._coincide("FI"):
             self._avanzar()
 
@@ -1124,7 +1215,6 @@ class AnalizadorSintacticoSemantico:
         regla_glc: str,
         es_valida: bool = True,
     ) -> None:
-        """Guarda la instrucción con su número de fila, texto, regla de la GLC y validez."""
         segmento: List[Token] = self.tokens[indice_inicio:indice_fin]
         if not segmento:
             return

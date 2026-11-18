@@ -1,5 +1,6 @@
+import tkinter as tk
 from tkinter import filedialog, ttk
-from typing import Callable, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 import customtkinter as ctk
 
 from backend.depurador import depurar_codigo
@@ -12,6 +13,7 @@ from backend.parser import analizar_sintactico_semantico
 COLOR_FONDO: str = "#141517"
 COLOR_PANEL: str = "#1d1f23"
 COLOR_EDITOR: str = "#18191c"
+COLOR_GUTTER: str = "#131417"
 COLOR_CREMA: str = "#e8d8c9"
 COLOR_AZUL: str = "#4b607f"
 COLOR_AZUL_HOVER: str = "#3a4c66"
@@ -20,10 +22,11 @@ COLOR_NARANJA_HOVER: str = "#d65c12"
 COLOR_TEXTO_OSCURO: str = "#16171a"
 COLOR_ERROR_ROJO: str = "#ff4d4d"
 
-# Programa válido de prueba (0 errores) basado en la GLC v7
-CODIGO_EJEMPLO: str = """// Inciso 1 a 6: programa COMPLETAMENTE VÁLIDO (0 errores).
-// Usa lo que la GLC v7 sí deriva: package, import simple, atributos, un método con
-// return, main, objetos, if/else, switch con default y println.
+
+# Diccionario de casos de prueba precargados para la defensa del proyecto
+CASOS_PRUEBA: Dict[str, str] = {
+    "1. Válido Completo (Tienda)": """// Prueba 1: Programa completamente válido (0 errores).
+// Muestra ámbitos separados (global vs calcular vs main), objetos, if/else y switch.
 package tienda;
 import utilerias.Calculadora;
 public class Tienda {
@@ -56,23 +59,99 @@ public class Tienda {
         }
         System.out.println(precio);
     }
-}"""
+}""",
+    "2. Depuración y Ciclos (while/for/do)": """/* Prueba 2: Demuestra eliminación de comentarios multilínea,
+   colapso de múltiples ';;;;', char + int, casteo explícito y ciclos. */
+package ciclos;
+public class ControlCiclos {
+    int globalBase; // Global inicia en 0 automáticamente
+    public static void main(String[] args) {
+        int i = 0;;;;
+        char codigo = 'B';
+        int suma = globalBase + codigo;;;;
+        double decimal = 45.8;
+        int truncado = (int) decimal;
+
+        while (i < 5) {
+            suma = suma + i;
+            i++;
+        }
+        do {
+            suma--;
+        } while (suma > 100);
+
+        for (int k = 0; k < 3; k++) {
+            System.out.println(suma);
+        }
+    }
+}""",
+    "3. Error Fase 2 (Falta package)": """// Prueba 3: Incumple el Inciso 2 porque no tiene 'package ID;' al inicio.
+// Bloquea el llenado de la Tabla de Símbolos y de Instrucciones.
+public class SinPaquete {
+    public static void main(String[] args) {
+        int x = 10;
+        System.out.println(x);
+    }
+}""",
+    "4. Errores Léxicos (Fase 3)": """// Prueba 4: Demuestra errores léxicos (@, #, identificador que inicia con número
+// y número decimal mal formado).
+package lexico;
+public class PruebaLexica {
+    public static void main(String[] args) {
+        int 1variable = 10;
+        double pi = 3.14.16;
+        int valor = 5 @ 2;
+        char malo = 'AB';
+    }
+}""",
+    "5. Errores Sintácticos (Falta ; y static)": """// Prueba 5: Demuestra detección exacta de falta de ';' al final de la línea
+// y prohibición de variables 'static' en la GLC v7.
+package sintaxis;
+public class PruebaSintactica {
+    static int prohibido = 1;
+    public static void main(String[] args) {
+        float a = 2.5f
+        int b = 3;
+        System.out.println(b)
+    }
+}""",
+    "6. Errores Semánticos (Tipos y Ámbitos)": """// Prueba 6: Demuestra errores semánticos:
+// - Asignar decimal sin 'f' (VTD/double) a float
+// - Asignar un long a un int sin casteo
+// - Usar variable local sin inicializar
+// - Redeclarar variable en el mismo ámbito
+package semantica;
+public class PruebaSemantica {
+    public static void main(String[] args) {
+        float peso = 15.75;
+        long grande = 500;
+        int chico = grande;
+        int sinValor;
+        int resultado = sinValor + 10;
+        int chico = 2;
+    }
+}""",
+}
 
 
 class PantallaAnalizador(ctk.CTkFrame):
     """
-    Pantalla principal con Editor de Código de altura completa a la izquierda
-    y Pestañas a la derecha estilizadas con la paleta Crema / Azul Pizarra / Naranja.
+    Pantalla principal con divisor arrastrable (PanedWindow), selector de
+    casos de prueba precargados y editor con numeración de líneas.
     """
 
     def __init__(self, master: ctk.CTk, al_volver: Callable[[], None]) -> None:
         super().__init__(master, fg_color=COLOR_FONDO)
         self.al_volver: Callable[[], None] = al_volver
         self._after_id: Optional[str] = None
+        self._total_lineas_actual: int = 0
 
         self._configurar_estilo_tablas()
         self._construir_interfaz()
-        self._cargar_codigo_ejemplo()
+
+        # Cargar la primera prueba por defecto al abrir
+        primera_prueba: str = list(CASOS_PRUEBA.keys())[0]
+        self._seleccionar_caso_prueba(primera_prueba)
 
     def _configurar_estilo_tablas(self) -> None:
         """Estiliza ttk.Treeview con fondo carbón, texto crema y cabeceras en azul pizarra."""
@@ -105,13 +184,12 @@ class PantallaAnalizador(ctk.CTkFrame):
         )
 
     def _construir_interfaz(self) -> None:
-        """Divide la pantalla en: Barra superior, Editor (Izquierda) y Pestañas (Derecha)."""
+        """Divide la pantalla en Barra Superior y un PanedWindow horizontal redimensionable."""
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
 
         # =====================================================================
-        # 1. BARRA SUPERIOR DE ACCIONES
+        # 1. BARRA SUPERIOR DE ACCIONES Y SELECTOR DE PRUEBAS
         # =====================================================================
         barra_sup = ctk.CTkFrame(
             self,
@@ -121,14 +199,12 @@ class PantallaAnalizador(ctk.CTkFrame):
             border_width=1,
             border_color=COLOR_AZUL,
         )
-        barra_sup.grid(
-            row=0, column=0, columnspan=2, sticky="ew", padx=14, pady=(12, 6)
-        )
+        barra_sup.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
 
         btn_volver = ctk.CTkButton(
             barra_sup,
             text="← Inicio",
-            width=90,
+            width=85,
             height=34,
             fg_color="transparent",
             border_width=1,
@@ -141,11 +217,11 @@ class PantallaAnalizador(ctk.CTkFrame):
 
         lbl_titulo = ctk.CTkLabel(
             barra_sup,
-            text="Simulador de Análisis (GLC v7)",
+            text="Simulador GLC v7",
             font=ctk.CTkFont(size=16, weight="bold"),
             text_color=COLOR_CREMA,
         )
-        lbl_titulo.pack(side="left", padx=8)
+        lbl_titulo.pack(side="left", padx=6)
 
         self.lbl_resumen = ctk.CTkLabel(
             barra_sup,
@@ -153,7 +229,7 @@ class PantallaAnalizador(ctk.CTkFrame):
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=COLOR_AZUL,
         )
-        self.lbl_resumen.pack(side="left", padx=20)
+        self.lbl_resumen.pack(side="left", padx=14)
 
         self.lbl_estado = ctk.CTkLabel(
             barra_sup,
@@ -161,12 +237,12 @@ class PantallaAnalizador(ctk.CTkFrame):
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=COLOR_CREMA,
         )
-        self.lbl_estado.pack(side="right", padx=16)
+        self.lbl_estado.pack(side="right", padx=14)
 
         btn_limpiar = ctk.CTkButton(
             barra_sup,
             text="Limpiar",
-            width=85,
+            width=80,
             height=34,
             fg_color=COLOR_AZUL,
             hover_color=COLOR_AZUL_HOVER,
@@ -175,22 +251,10 @@ class PantallaAnalizador(ctk.CTkFrame):
         )
         btn_limpiar.pack(side="right", padx=5, pady=10)
 
-        btn_ejemplo = ctk.CTkButton(
-            barra_sup,
-            text="Cargar Ejemplo",
-            width=125,
-            height=34,
-            fg_color=COLOR_AZUL,
-            hover_color=COLOR_AZUL_HOVER,
-            text_color=COLOR_CREMA,
-            command=self._cargar_codigo_ejemplo,
-        )
-        btn_ejemplo.pack(side="right", padx=5, pady=10)
-
         btn_archivo = ctk.CTkButton(
             barra_sup,
-            text="Abrir Archivo (.java / .txt)",
-            width=180,
+            text="Abrir Archivo",
+            width=120,
             height=34,
             fg_color=COLOR_NARANJA,
             hover_color=COLOR_NARANJA_HOVER,
@@ -200,51 +264,128 @@ class PantallaAnalizador(ctk.CTkFrame):
         )
         btn_archivo.pack(side="right", padx=5, pady=10)
 
+        # Menú desplegable con las pruebas precargadas
+        self.menu_pruebas = ctk.CTkOptionMenu(
+            barra_sup,
+            values=list(CASOS_PRUEBA.keys()),
+            width=250,
+            height=34,
+            fg_color=COLOR_AZUL,
+            button_color=COLOR_AZUL_HOVER,
+            button_hover_color=COLOR_NARANJA,
+            dropdown_fg_color=COLOR_PANEL,
+            dropdown_text_color=COLOR_CREMA,
+            dropdown_hover_color=COLOR_AZUL_HOVER,
+            text_color=COLOR_CREMA,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._seleccionar_caso_prueba,
+        )
+        self.menu_pruebas.pack(side="right", padx=5, pady=10)
+
+        lbl_pruebas = ctk.CTkLabel(
+            barra_sup,
+            text="Pruebas:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=COLOR_CREMA,
+        )
+        lbl_pruebas.pack(side="right", padx=(8, 2))
+
         # =====================================================================
-        # 2. MITAD IZQUIERDA (100% ALTURA): EDITOR DE CÓDIGO FUENTE
+        # 2. CONTENEDOR DIVIDIDO REDIMENSIONABLE (PANEDWINDOW)
+        #    Permite arrastrar el borde central hacia la izquierda o derecha.
+        # =====================================================================
+        self.panel_dividido = tk.PanedWindow(
+            self,
+            orient="horizontal",
+            bg=COLOR_AZUL,
+            bd=0,
+            sashwidth=6,
+            sashpad=0,
+            sashrelief="flat",
+            opaqueresize=True,
+        )
+        self.panel_dividido.grid(
+            row=1, column=0, sticky="nsew", padx=14, pady=(6, 14)
+        )
+
+        # =====================================================================
+        # 2.1 PANEL IZQUIERDO: EDITOR CON NUMERACIÓN DE LÍNEAS
         # =====================================================================
         marco_editor = ctk.CTkFrame(
-            self,
-            corner_radius=14,
+            self.panel_dividido,
+            corner_radius=12,
             fg_color=COLOR_PANEL,
             border_width=1,
             border_color=COLOR_AZUL,
-        )
-        marco_editor.grid(
-            row=1, column=0, sticky="nsew", padx=(14, 7), pady=(6, 14)
         )
         marco_editor.grid_rowconfigure(1, weight=1)
         marco_editor.grid_columnconfigure(0, weight=1)
 
         lbl_editor = ctk.CTkLabel(
             marco_editor,
-            text="Editor de Código Fuente (Java sin depurar)",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            text="Editor de Código Fuente (Arrastra la barra central ⇔ para redimensionar)",
+            font=ctk.CTkFont(size=13, weight="bold"),
             text_color=COLOR_CREMA,
         )
         lbl_editor.grid(row=0, column=0, sticky="w", padx=14, pady=(10, 6))
 
-        self.txt_codigo = ctk.CTkTextbox(
+        contenedor_codigo = ctk.CTkFrame(
             marco_editor,
+            fg_color=COLOR_EDITOR,
+            corner_radius=8,
+            border_width=1,
+            border_color="#2b3038",
+        )
+        contenedor_codigo.grid(
+            row=1, column=0, sticky="nsew", padx=12, pady=(0, 12)
+        )
+        contenedor_codigo.grid_rowconfigure(0, weight=1)
+        contenedor_codigo.grid_columnconfigure(1, weight=1)
+
+        self.txt_lineas = ctk.CTkTextbox(
+            contenedor_codigo,
+            width=50,
+            font=ctk.CTkFont(family="Consolas", size=14),
+            fg_color=COLOR_GUTTER,
+            text_color=COLOR_AZUL,
+            border_width=0,
+            corner_radius=0,
+            wrap="none",
+            activate_scrollbars=False,
+            state="disabled",
+        )
+        self.txt_lineas.grid(row=0, column=0, sticky="ns", padx=(2, 0), pady=2)
+        self.txt_lineas._textbox.tag_configure("derecha", justify="right")
+
+        self.txt_codigo = ctk.CTkTextbox(
+            contenedor_codigo,
             font=ctk.CTkFont(family="Consolas", size=14),
             fg_color=COLOR_EDITOR,
             text_color=COLOR_CREMA,
-            border_width=1,
-            border_color="#2b3038",
+            border_width=0,
+            corner_radius=0,
             wrap="none",
             undo=True,
         )
         self.txt_codigo.grid(
-            row=1, column=0, sticky="nsew", padx=12, pady=(0, 12)
+            row=0, column=1, sticky="nsew", padx=(0, 2), pady=2
+        )
+
+        self.txt_codigo._textbox.configure(
+            yscrollcommand=self._al_desplazar_editor
         )
         self.txt_codigo.bind("<KeyRelease>", self._al_escribir_codigo)
+        self.txt_codigo.bind("<MouseWheel>", self._sincronizar_scroll_lineas)
+        self.txt_codigo.bind("<Button-4>", self._sincronizar_scroll_lineas)
+        self.txt_codigo.bind("<Button-5>", self._sincronizar_scroll_lineas)
+        self.txt_codigo.bind("<ButtonRelease-1>", self._sincronizar_scroll_lineas)
 
         # =====================================================================
-        # 3. MITAD DERECHA (100% ALTURA): PESTAÑAS DE RESULTADOS
+        # 2.2 PANEL DERECHO: PESTAÑAS DE RESULTADOS
         # =====================================================================
         self.pestanas = ctk.CTkTabview(
-            self,
-            corner_radius=14,
+            self.panel_dividido,
+            corner_radius=12,
             fg_color=COLOR_PANEL,
             border_width=1,
             border_color=COLOR_AZUL,
@@ -255,9 +396,10 @@ class PantallaAnalizador(ctk.CTkFrame):
             segmented_button_unselected_hover_color=COLOR_AZUL_HOVER,
             text_color=COLOR_CREMA,
         )
-        self.pestanas.grid(
-            row=1, column=1, sticky="nsew", padx=(7, 14), pady=(6, 14)
-        )
+
+        # Agregar ambos paneles al PanedWindow con tamaño mínimo para que nunca desaparezcan
+        self.panel_dividido.add(marco_editor, minsize=340, stretch="always")
+        self.panel_dividido.add(self.pestanas, minsize=400, stretch="always")
 
         tab_depurado = self.pestanas.add("1. Código Depurado")
         tab_simbolos = self.pestanas.add("2. Tabla de Símbolos")
@@ -328,7 +470,6 @@ class PantallaAnalizador(ctk.CTkFrame):
         self.tabla_instrucciones_view.column("instruccion", width=260, anchor="w")
         self.tabla_instrucciones_view.column("regla", width=250, anchor="w")
 
-        # Tag para pintar en rojo las instrucciones que contienen error
         self.tabla_instrucciones_view.tag_configure(
             "invalida", foreground=COLOR_ERROR_ROJO
         )
@@ -391,11 +532,40 @@ class PantallaAnalizador(ctk.CTkFrame):
         scroll_err.grid(row=0, column=1, sticky="ns", padx=(0, 6), pady=6)
 
     # =========================================================================
+    # NUMERACIÓN DE LÍNEAS SINCRONIZADA
+    # =========================================================================
+
+    def _al_desplazar_editor(self, primero: str, ultimo: str) -> None:
+        self.txt_codigo._y_scrollbar.set(primero, ultimo)
+        self.txt_lineas._textbox.yview_moveto(primero)
+
+    def _sincronizar_scroll_lineas(self, _evento: object = None) -> None:
+        fraccion_superior: float = self.txt_codigo._textbox.yview()[0]
+        self.txt_lineas._textbox.yview_moveto(fraccion_superior)
+
+    def _actualizar_numeros_linea(self) -> None:
+        indice_final: str = self.txt_codigo._textbox.index("end-1c")
+        total_lineas: int = int(indice_final.split(".")[0])
+
+        if total_lineas != self._total_lineas_actual:
+            self._total_lineas_actual = total_lineas
+            numeros: str = "\n".join(str(i) for i in range(1, total_lineas + 1))
+
+            self.txt_lineas.configure(state="normal")
+            self.txt_lineas.delete("1.0", "end")
+            self.txt_lineas.insert("1.0", numeros)
+            self.txt_lineas._textbox.tag_add("derecha", "1.0", "end")
+            self.txt_lineas.configure(state="disabled")
+
+        self._sincronizar_scroll_lineas()
+
+    # =========================================================================
     # ACTUALIZACIÓN CONTINUA (INCISO 7) Y EJECUCIÓN DE FASES
     # =========================================================================
 
     def _al_escribir_codigo(self, _evento: object = None) -> None:
-        """Reinicia el temporizador de 300 ms al soltar una tecla (debounce)."""
+        self._actualizar_numeros_linea()
+
         if self._after_id is not None:
             self.after_cancel(self._after_id)
 
@@ -403,8 +573,8 @@ class PantallaAnalizador(ctk.CTkFrame):
         self._after_id = self.after(300, self.ejecutar_analisis)
 
     def ejecutar_analisis(self) -> None:
-        """Ejecuta las fases del compilador respetando el bloqueo del Inciso 2."""
         self._after_id = None
+        self._actualizar_numeros_linea()
         codigo_crudo: str = self.txt_codigo.get("1.0", "end-1c")
 
         if not codigo_crudo.strip():
@@ -438,7 +608,6 @@ class PantallaAnalizador(ctk.CTkFrame):
             analizar_sintactico_semantico(tokens, tabla_simbolos)
         )
 
-        # Si NO cumple el Inciso 2, NO procesa los siguientes incisos
         if not estructura_valida:
             self._llenar_tabla_simbolos([])
             self._llenar_tabla_instrucciones([], set())
@@ -447,7 +616,7 @@ class PantallaAnalizador(ctk.CTkFrame):
                 text=f"Símbolos: 0  |  Instrucciones: 0  |  Errores: {len(errores_sint_sem)}"
             )
             self.lbl_estado.configure(
-                text="✖ Falla validación de clase principal (Inciso 2)",
+                text="✖ Falla validación base: requiere package, class y main (Inciso 2)",
                 text_color=COLOR_NARANJA,
             )
             return
@@ -455,7 +624,6 @@ class PantallaAnalizador(ctk.CTkFrame):
         todos_los_errores: List[ErrorCompilador] = errores_lexicos + errores_sint_sem
         todos_los_errores.sort(key=lambda e: e.linea)
 
-        # Conjunto de líneas con cualquier error para pintar la instrucción en rojo
         lineas_con_error: Set[int] = {err.linea for err in todos_los_errores}
 
         self._llenar_tabla_simbolos(tabla_simbolos)
@@ -505,7 +673,6 @@ class PantallaAnalizador(ctk.CTkFrame):
     def _llenar_tabla_instrucciones(
         self, instrucciones: List[Instruccion], lineas_con_error: Set[int]
     ) -> None:
-        """Llena la tabla de instrucciones y aplica el tag 'invalida' (rojo) si tiene error."""
         for item in self.tabla_instrucciones_view.get_children():
             self.tabla_instrucciones_view.delete(item)
 
@@ -529,6 +696,13 @@ class PantallaAnalizador(ctk.CTkFrame):
                 "", "end", values=(err.linea, err.error, err.tipo)
             )
 
+    def _seleccionar_caso_prueba(self, nombre_prueba: str) -> None:
+        """Carga en el editor el caso de prueba elegido en el menú desplegable."""
+        codigo: str = CASOS_PRUEBA.get(nombre_prueba, "")
+        self.txt_codigo.delete("1.0", "end")
+        self.txt_codigo.insert("1.0", codigo)
+        self.ejecutar_analisis()
+
     def _abrir_archivo(self) -> None:
         ruta: str = filedialog.askopenfilename(
             title="Seleccionar archivo Java o de texto",
@@ -545,11 +719,6 @@ class PantallaAnalizador(ctk.CTkFrame):
 
         self.txt_codigo.delete("1.0", "end")
         self.txt_codigo.insert("1.0", contenido)
-        self.ejecutar_analisis()
-
-    def _cargar_codigo_ejemplo(self) -> None:
-        self.txt_codigo.delete("1.0", "end")
-        self.txt_codigo.insert("1.0", CODIGO_EJEMPLO)
         self.ejecutar_analisis()
 
     def _limpiar_editor(self) -> None:
